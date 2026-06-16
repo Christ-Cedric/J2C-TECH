@@ -8,6 +8,280 @@
  
   <link rel="stylesheet" href="styles.css">
 </head>
+<script>
+// ============================================
+// CONFIGURATION SÉCURITÉ
+// ============================================
+
+const CONTACT_FORM_CONFIG = {
+    MIN_FORM_TIME: 2,        // Temps minimum avant envoi (secondes)
+    MAX_SUBMISSIONS: 5,      // Max 5 envois par 15 minutes
+    TIME_WINDOW: 15 * 60 * 1000, // Fenêtre de temps (ms)
+    SERVICE_URL: 'https://formsubmit.co/ajax/j2c.tech.2@gmail.com', // À adapter
+    TIMEOUT: 10000           // Timeout de la requête (ms)
+};
+
+// ============================================
+// INITIALISATION
+// ============================================
+
+function initializeContactForm() {
+    // Générer token CSRF
+    const token = generateCSRFToken();
+    const tokenInput = document.getElementById('csrfToken');
+    if (tokenInput) {
+        tokenInput.value = token;
+        localStorage.setItem('csrfToken', token);
+    }
+    
+    // Marquer l'heure de début
+    const formStartInput = document.getElementById('form-start');
+    if (formStartInput) {
+        formStartInput.value = Date.now();
+    }
+}
+
+// ============================================
+// GÉNÉRATION TOKEN CSRF
+// ============================================
+
+function generateCSRFToken() {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return btoa(String.fromCharCode.apply(null, array));
+}
+
+// ============================================
+// VALIDATION
+// ============================================
+
+function validateName(name) {
+    const trimmed = name.trim();
+    if (trimmed.length < 2) return "Minimum 2 caractères";
+    if (trimmed.length > 100) return "Maximum 100 caractères";
+    if (!/^[a-zA-ZÀ-ÿ\s'-]+$/.test(trimmed)) return "Caractères invalides";
+    return null;
+}
+
+function validateEmail(email) {
+    const trimmed = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    if (!emailRegex.test(trimmed)) return "Email invalide";
+    if (trimmed.length > 254) return "Email trop long";
+    return null;
+}
+
+function validateSubject(subject) {
+    const trimmed = subject.trim();
+    if (trimmed.length > 200) return "Maximum 200 caractères";
+    return null;
+}
+
+function validateMessage(message) {
+    const trimmed = message.trim();
+    if (trimmed.length < 10) return "Minimum 10 caractères";
+    if (trimmed.length > 5000) return "Maximum 5000 caractères";
+    if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(trimmed)) return "Contenu invalide";
+    return null;
+}
+
+// ============================================
+// SANITIZATION
+// ============================================
+
+function sanitizeInput(str) {
+    return str
+        .trim()
+        .replace(/[<>]/g, '')
+        .slice(0, 5000);
+}
+
+// ============================================
+// PROTECTION RATE LIMITING
+// ============================================
+
+function checkRateLimit() {
+    const submissions = JSON.parse(localStorage.getItem('formSubmissions') || '[]');
+    const now = Date.now();
+    
+    const recentSubmissions = submissions.filter(time => now - time < CONTACT_FORM_CONFIG.TIME_WINDOW);
+    
+    if (recentSubmissions.length >= CONTACT_FORM_CONFIG.MAX_SUBMISSIONS) {
+        return false;
+    }
+    
+    recentSubmissions.push(now);
+    localStorage.setItem('formSubmissions', JSON.stringify(recentSubmissions));
+    return true;
+}
+
+// ============================================
+// VALIDATION DÉLAI MINIMUM
+// ============================================
+
+function checkMinimumTime() {
+    const startTimeInput = document.getElementById('form-start');
+    if (!startTimeInput) return false;
+    
+    const startTime = Number(startTimeInput.value);
+    const elapsed = (Date.now() - startTime) / 1000;
+    return elapsed >= CONTACT_FORM_CONFIG.MIN_FORM_TIME;
+}
+
+// ============================================
+// VÉRIFICATION HONEYPOT
+// ============================================
+
+function checkHoneypot(form) {
+    const honeypot = form.querySelector('[name="_honeypot"]');
+    if (!honeypot) return true;
+    return honeypot.value === '';
+}
+
+// ============================================
+// AFFICHAGE MESSAGES
+// ============================================
+
+function showSuccess(element, message) {
+    element.className = 'form-status success';
+    element.textContent = message;
+}
+
+function showError(element, message) {
+    element.className = 'form-status error';
+    element.textContent = '⚠️ ' + message;
+}
+
+// ============================================
+// GESTION DU FORMULAIRE
+// ============================================
+
+async function handleContactFormSubmit(e) {
+    e.preventDefault();
+    
+    const form = e.target;
+    const submitBtn = document.getElementById('submitBtn');
+    const formStatus = document.getElementById('formStatus');
+    
+    if (!submitBtn || !formStatus) return;
+    
+    // Réinitialiser les erreurs
+    document.querySelectorAll('.contact-form .error').forEach(el => el.textContent = '');
+    formStatus.className = 'form-status';
+    formStatus.textContent = '';
+    
+    // 🚨 VÉRIFICATIONS ANTI-BOT
+    if (!checkHoneypot(form)) {
+        console.warn('Bot détecté (honeypot)');
+        return;
+    }
+    
+    if (!checkMinimumTime()) {
+        showError(formStatus, 'Veuillez prendre le temps de remplir le formulaire.');
+        return;
+    }
+    
+    if (!checkRateLimit()) {
+        showError(formStatus, 'Trop de tentatives. Veuillez réessayer plus tard.');
+        return;
+    }
+    
+    // 🔍 VALIDATION DES CHAMPS
+    const name = document.getElementById('name').value;
+    const email = document.getElementById('email').value;
+    const subject = document.getElementById('subject').value;
+    const message = document.getElementById('message').value;
+    
+    let hasErrors = false;
+    
+    const nameError = validateName(name);
+    if (nameError) {
+        document.getElementById('nameError').textContent = nameError;
+        hasErrors = true;
+    }
+    
+    const emailError = validateEmail(email);
+    if (emailError) {
+        document.getElementById('emailError').textContent = emailError;
+        hasErrors = true;
+    }
+    
+    const subjectError = validateSubject(subject);
+    if (subjectError) {
+        document.getElementById('subjectError').textContent = subjectError;
+        hasErrors = true;
+    }
+    
+    const messageError = validateMessage(message);
+    if (messageError) {
+        document.getElementById('messageError').textContent = messageError;
+        hasErrors = true;
+    }
+    
+    if (hasErrors) return;
+    
+    // 🔐 ENVOYER AVEC SANITIZATION
+    submitBtn.disabled = true;
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Envoi en cours...';
+    
+    try {
+        const payload = new FormData();
+        payload.append('name', sanitizeInput(name));
+        payload.append('email', sanitizeInput(email));
+        payload.append('subject', sanitizeInput(subject));
+        payload.append('message', sanitizeInput(message));
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), CONTACT_FORM_CONFIG.TIMEOUT);
+        
+        const response = await fetch(CONTACT_FORM_CONFIG.SERVICE_URL, {
+            method: 'POST',
+            body: payload,
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showSuccess(formStatus, 'Message envoyé avec succès ! ✓');
+            form.reset();
+            document.getElementById('form-start').value = Date.now();
+        } else {
+            showError(formStatus, 'Erreur lors de l\'envoi. Veuillez réessayer.');
+        }
+        
+    } catch (error) {
+        console.error('Erreur envoi:', error);
+        showError(formStatus, 'Erreur lors de l\'envoi. Veuillez réessayer.');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+    }
+}
+
+// ============================================
+// DÉMARRAGE
+// ============================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    initializeContactForm();
+    
+    const contactForm = document.getElementById('contactForm');
+    if (contactForm) {
+        contactForm.addEventListener('submit', handleContactFormSubmit);
+    }
+});
+
+// Reinitialiser à chaque retour sur la page
+window.addEventListener('pageshow', initializeContactForm);
+</script>
 <body>
   <header class="site-header">
     <nav class="navbar" aria-label="Navigation principale">
@@ -303,26 +577,72 @@
             <span>Koudougou, Burkina Faso</span>
           </div>
         </div>
-        <form class="contact-form" action="#" method="post">
-          <label>
-            Nom complet
-            <input type="text" name="name" placeholder="Votre nom" required>
-          </label>
-          <label>
-            Adresse email
-            <input type="email" name="email" placeholder="vous@entreprise.com" required>
-          </label>
-          <label>
+       <div class="contact-form-wrapper">
+    <form class="contact-form" id="contactForm" novalidate>
+        <!-- Token anti-CSRF -->
+        <input type="hidden" name="_token" id="csrfToken">
+        <input type="hidden" name="form-start" id="form-start">
+        
+        <!-- Honeypot (piège à bot) -->
+        <input type="text" name="_honeypot" class="honeypot" tabindex="-1" autocomplete="off">
+        
+        <!-- Champs normaux -->
+        <label>
+            Nom complet <span style="color: #d32f2f;">*</span>
+            <input 
+                type="text" 
+                name="name" 
+                id="name"
+                placeholder="Votre nom" 
+                required
+                maxlength="100"
+            >
+            <span class="error" id="nameError"></span>
+        </label>
+        
+        <label>
+            Adresse email <span style="color: #d32f2f;">*</span>
+            <input 
+                type="email" 
+                name="email" 
+                id="email"
+                placeholder="vous@entreprise.com" 
+                required
+                maxlength="254"
+            >
+            <span class="error" id="emailError"></span>
+        </label>
+        
+        <label>
             Sujet
-            <input type="text" name="subject" placeholder="Votre besoin">
-          </label>
-          <label>
-            Message
-            <textarea name="message" rows="5" placeholder="Decrivez votre projet" required></textarea>
-          </label>
-          <button class="button primary" type="submit">Envoyer le message</button>
-        </form>
-      </div>
+            <input 
+                type="text" 
+                name="subject" 
+                id="subject"
+                placeholder="Votre besoin"
+                maxlength="200"
+            >
+            <span class="error" id="subjectError"></span>
+        </label>
+        
+        <label>
+            Message <span style="color: #d32f2f;">*</span>
+            <textarea 
+                name="message" 
+                id="message"
+                rows="5" 
+                placeholder="Décrivez votre projet"
+                required
+                maxlength="5000"
+            ></textarea>
+            <span class="error" id="messageError"></span>
+        </label>
+        
+        <button class="button primary" type="submit" id="submitBtn">Envoyer le message</button>
+        <div class="form-status" id="formStatus"></div>
+    </form>
+</div>
+      
     </section>
   </main>
 
